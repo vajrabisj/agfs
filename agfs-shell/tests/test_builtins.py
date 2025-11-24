@@ -330,5 +330,51 @@ class TestBuiltins(unittest.TestCase):
         self.assertIn('/dest/file2.txt', copied_paths)
         self.assertIn('/dest/file3.txt', copied_paths)
 
+    def test_cp_with_local_prefix(self):
+        """Test cp command with local: prefix to ensure it doesn't get path-resolved"""
+        import tempfile
+        import shutil
+
+        cmd = BUILTINS['cp']
+
+        # Create a temporary directory for testing
+        temp_dir = tempfile.mkdtemp()
+
+        try:
+            # Create a mock filesystem
+            mock_fs = Mock()
+
+            def mock_read_file(path, stream=False):
+                if stream:
+                    # Return an iterable of chunks
+                    return [b"file contents chunk 1", b"file contents chunk 2"]
+                return b"file contents"
+
+            def mock_get_file_info(path):
+                return {'name': os.path.basename(path), 'isDir': False, 'size': 100}
+
+            mock_fs.read_file = mock_read_file
+            mock_fs.get_file_info = mock_get_file_info
+
+            # Test download: cp <agfs_path> local:./
+            # The local:./ should be resolved to current directory, not treated as AGFS path
+            proc = self.create_process("cp", [
+                "/s3fs/test/file.wav",
+                f"local:{temp_dir}/"
+            ])
+            proc.filesystem = mock_fs
+            proc.cwd = "/s3fs/aws/dongxu/omi-recording/raw/2025/11/23/16"
+
+            exit_code = cmd(proc)
+            self.assertEqual(exit_code, 0)
+
+            # Verify file was downloaded to local directory
+            downloaded_file = os.path.join(temp_dir, "file.wav")
+            self.assertTrue(os.path.exists(downloaded_file))
+
+        finally:
+            # Clean up temp directory
+            shutil.rmtree(temp_dir)
+
 if __name__ == '__main__':
     unittest.main()

@@ -1415,7 +1415,7 @@ def _download_dir(process: Process, agfs_path: str, local_path: str) -> int:
         return 1
 
 
-@command(needs_path_resolution=True)
+@command()
 def cmd_cp(process: Process) -> int:
     """
     Copy files between local filesystem and AGFS
@@ -1426,6 +1426,8 @@ def cmd_cp(process: Process) -> int:
         cp [-r] <agfs_path> local:<path>   # Download from AGFS to local
         cp [-r] <agfs_path1> <agfs_path2>  # Copy within AGFS
     """
+    import os
+
     # Parse arguments
     recursive = False
     args = process.args[:]
@@ -1446,6 +1448,11 @@ def cmd_cp(process: Process) -> int:
     dest_is_local = dest.startswith('local:')
     if dest_is_local:
         dest = dest[6:]  # Remove 'local:' prefix
+    else:
+        # Resolve AGFS path relative to current working directory
+        if not dest.startswith('/'):
+            dest = os.path.join(process.cwd, dest)
+            dest = os.path.normpath(dest)
 
     exit_code = 0
 
@@ -1456,6 +1463,11 @@ def cmd_cp(process: Process) -> int:
 
         if source_is_local:
             source = source[6:]  # Remove 'local:' prefix
+        else:
+            # Resolve AGFS path relative to current working directory
+            if not source.startswith('/'):
+                source = os.path.join(process.cwd, source)
+                source = os.path.normpath(source)
 
         # Determine operation type
         if source_is_local and not dest_is_local:
@@ -1479,12 +1491,10 @@ def cmd_cp(process: Process) -> int:
 
 
 def _cp_upload(process: Process, local_path: str, agfs_path: str, recursive: bool = False) -> int:
-    """Helper: Upload local file or directory to AGFS"""
-    # Resolve agfs_path relative to current working directory
-    if not agfs_path.startswith('/'):
-        agfs_path = os.path.join(process.cwd, agfs_path)
-        agfs_path = os.path.normpath(agfs_path)
+    """Helper: Upload local file or directory to AGFS
 
+    Note: agfs_path should already be resolved to absolute path by caller
+    """
     try:
         if not os.path.exists(local_path):
             process.stderr.write(f"cp: {local_path}: No such file or directory\n")
@@ -1529,12 +1539,10 @@ def _cp_upload(process: Process, local_path: str, agfs_path: str, recursive: boo
 
 
 def _cp_download(process: Process, agfs_path: str, local_path: str, recursive: bool = False) -> int:
-    """Helper: Download AGFS file or directory to local"""
-    # Resolve agfs_path relative to current working directory
-    if not agfs_path.startswith('/'):
-        agfs_path = os.path.join(process.cwd, agfs_path)
-        agfs_path = os.path.normpath(agfs_path)
+    """Helper: Download AGFS file or directory to local
 
+    Note: agfs_path should already be resolved to absolute path by caller
+    """
     try:
         # Check if source is a directory
         info = process.filesystem.get_file_info(agfs_path)
@@ -1580,16 +1588,10 @@ def _cp_download(process: Process, agfs_path: str, local_path: str, recursive: b
 
 
 def _cp_agfs(process: Process, source_path: str, dest_path: str, recursive: bool = False) -> int:
-    """Helper: Copy within AGFS"""
-    # Resolve paths relative to current working directory
-    if not source_path.startswith('/'):
-        source_path = os.path.join(process.cwd, source_path)
-        source_path = os.path.normpath(source_path)
+    """Helper: Copy within AGFS
 
-    if not dest_path.startswith('/'):
-        dest_path = os.path.join(process.cwd, dest_path)
-        dest_path = os.path.normpath(dest_path)
-
+    Note: source_path and dest_path should already be resolved to absolute paths by caller
+    """
     try:
         # Check if source is a directory
         info = process.filesystem.get_file_info(source_path)
