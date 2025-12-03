@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 from typing import Any, Optional
 from mcp.server import Server
 from mcp.types import Tool, TextContent, Prompt, PromptMessage
@@ -16,10 +17,20 @@ logger = logging.getLogger("agfs-mcp")
 class AGFSMCPServer:
     """MCP Server for AGFS operations"""
 
-    def __init__(self, agfs_url: str = "http://localhost:8080/api/v1"):
+    def __init__(
+        self,
+        agfs_url: str = "http://localhost:8080/api/v1",
+        skills_base: Optional[str] = None,
+    ):
         self.server = Server("agfs-mcp")
         self.agfs_url = agfs_url
         self.client: Optional[AGFSClient] = None
+        self.skills_base = skills_base or os.environ.get("SKILLS_BASE_PATH", "/skills")
+        if self.skills_base == "":
+            self.skills_base = None
+        elif self.skills_base and not self.skills_base.startswith("/"):
+            self.skills_base = "/" + self.skills_base
+        self.skill_tool_map: dict[str, dict[str, str]] = {}
         self._setup_handlers()
 
     def _get_client(self) -> AGFSClient:
@@ -27,6 +38,74 @@ class AGFSMCPServer:
         if self.client is None:
             self.client = AGFSClient(self.agfs_url)
         return self.client
+
+    def _safe_cat(self, path: str) -> str:
+        """Read file content, returning empty string on failure"""
+        try:
+            data = self._get_client().cat(path)
+            if isinstance(data, bytes):
+                return data.decode("utf-8", errors="replace")
+            return data
+        except AGFSClientError as exc:
+            logger.debug("Failed to read %s: %s", path, exc)
+            return ""
+
+    def _discover_skills(self) -> list[dict[str, str]]:
+        """Discover skills mounted under skills_base"""
+        self.skill_tool_map = {}
+        if not self.skills_base:
+            return []
+        try:
+            entries = self._get_client().ls(self.skills_base)
+        except AGFSClientError as exc:
+            logger.debug("Skills discovery failed: %s", exc)
+            return []
+
+        skills: list[dict[str, str]] = []
+        for entry in entries:
+            if not entry.get("isDir"):
+                continue
+            name = entry.get("name") or entry.get("path") or "skill"
+            skill_path = f"{self.skills_base.rstrip('/')}/{name}"
+            metadata = self._safe_cat(f"{skill_path}/metadata").strip()
+            instructions = self._safe_cat(f"{skill_path}/instructions").strip()
+
+            safe_base = "".join(ch if ch.isalnum() else "_" for ch in name.lower()).strip("_")
+            safe_name = f"skill_{safe_base}" if safe_base else f"skill_{len(skills)+1}"
+            suffix = 1
+            while safe_name in self.skill_tool_map:
+                suffix += 1
+                safe_name = f"{safe_name}_{suffix}"
+
+            desc_parts = []
+            if metadata:
+                desc_parts.append(metadata)
+            if instructions:
+                snippet = instructions[:300]
+                if len(instructions) > 300:
+                    snippet += "..."
+                desc_parts.append(f"Instructions: {snippet}")
+            description = " | ".join(desc_parts) if desc_parts else "SkillsFS action"
+
+            info = {
+                "tool_name": safe_name,
+                "path": skill_path,
+                "display_name": name,
+                "description": description,
+            }
+            self.skill_tool_map[safe_name] = info
+            skills.append(info)
+
+        return skills
+
+    def _get_skill_info(self, tool_name: str) -> Optional[dict[str, str]]:
+        """Return skill info, refreshing discovery if necessary"""
+        skill = self.skill_tool_map.get(tool_name)
+        if skill:
+            return skill
+        # Refresh discovery in case new skills were mounted
+        self._discover_skills()
+        return self.skill_tool_map.get(tool_name)
 
     def _setup_handlers(self):
         """Setup MCP request handlers"""
@@ -158,8 +237,8 @@ The key insight is that whether you're reading from a SQL database at /db/users/
 
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
-            """List available AGFS tools"""
-            return [
+            """List available AGFS tools (including SkillsFS tools)"""
+            tools: list[Tool] = [
                 Tool(
                     name="agfs_ls",
                     description="List directory contents in AGFS",
@@ -479,6 +558,33 @@ The key insight is that whether you're reading from a SQL database at /db/users/
                     }
                 ),
             ]
+            for skill in self._discover_skills():
+                tools.append(
+                    Tool(
+                        name=skill["tool_name"],
+                        description=f"SkillsFS: {skill['description']}",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "params": {
+                                    "description": "JSON or plain text payload to write to /execute",
+                                    "oneOf": [
+                                        {"type": "string"},
+                                        {"type": "object"},
+                                        {"type": "array"},
+                                    ],
+                                },
+                                "refresh": {
+                                    "type": "boolean",
+                                    "description": "If true, force a fresh execution even if cache is valid",
+                                    "default": False,
+                                },
+                            },
+                            "required": ["params"],
+                        },
+                    )
+                )
+            return tools
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Any) -> list[TextContent]:
@@ -677,6 +783,27 @@ The key insight is that whether you're reading from a SQL database at /db/users/
                     )]
 
                 else:
+                    skill_info = self._get_skill_info(name)
+                    if skill_info:
+                        params = arguments.get("params")
+                        if params is None:
+                            raise ValueError("params is required for skill invocation")
+                        if isinstance(params, (dict, list)):
+                            payload = json.dumps(params, ensure_ascii=False)
+                        else:
+                            payload = str(params)
+                        skill_path = skill_info["path"]
+                        client.write(f"{skill_path}/execute", payload.encode("utf-8"))
+                        result = self._safe_cat(f"{skill_path}/result") or "(empty result)"
+                        status = self._safe_cat(f"{skill_path}/status") or "(no status info)"
+                        response = (
+                            f"Skill: {skill_info['display_name']} ({skill_path})\n"
+                            f"Payload: {payload}\n\n"
+                            f"Result:\n{result}\n\n"
+                            f"Status:\n{status}"
+                        )
+                        return [TextContent(type="text", text=response)]
+
                     return [TextContent(
                         type="text",
                         text=f"Unknown tool: {name}"

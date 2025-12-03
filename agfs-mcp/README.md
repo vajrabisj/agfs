@@ -15,6 +15,7 @@ AGFS MCP Server exposes AGFS file system operations as MCP tools, allowing AI as
 - **Plugin Management**: Mount/unmount plugins, list mounts
 - **Health Monitoring**: Check server status
 - **Notifications**: Send messages via QueueFS
+- **SkillsFS Integration**: Auto-discover SkillsFS directories and expose them as dedicated MCP tools (one per skill)
 
 ## Installation
 
@@ -194,6 +195,26 @@ Once configured, the following tools are available to AI assistants:
   data: Message data to send
   ```
   Automatically creates sender and receiver queues if they don't exist.
+
+#### SkillsFS Tools (auto-discovered)
+
+If you mount SkillsFS instances under `/skills` (or another path via `SKILLS_BASE_PATH`), the MCP server will expose each skill as its own tool:
+
+- Tool name: `skill_<folder_name>` (sanitized)
+- Description: Derived from `/metadata` and `/instructions`
+- Schema:
+  ```
+  params: JSON/string payload to write into /skills/<name>/execute
+  refresh: Optional boolean to force fresh execution (default: false)
+  ```
+
+On invocation the server:
+
+1. Writes `params` to `/skills/<name>/execute`
+2. Reads `/skills/<name>/result` (triggering execution)
+3. Returns both the result and the latest `/status`
+
+Environment variable `SKILLS_BASE_PATH` (default `/skills`) controls where the MCP server looks for skills.
 
 ## Example Usage with AI
 
