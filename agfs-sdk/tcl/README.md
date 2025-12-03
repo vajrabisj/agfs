@@ -219,6 +219,10 @@ SDK包含几个示例脚本：
    - 支持调用本地Ollama模型（默认 `qwen3:4b`，超时时间2分钟）
    - 可处理带多步骤的任务，并把结果写回AGFS供其它组件读取
 
+6. **任务广播脚本** (`examples/broadcast_tasks.tcl`)
+   - 将同一个任务描述同时投递到多个Agent队列
+   - 自动生成任务ID及结果目录提示，便于下游Agent读取
+
 ## 客户端配置
 
 ```tcl
@@ -296,6 +300,13 @@ tclsh examples/agent_task_loop.tcl \
     -ollama_url http://localhost:11434 \
     -ollama_timeout 120000
 
+# 任务广播示例
+tclsh examples/broadcast_tasks.tcl \
+    -agents agent1,agent2,agent3 \
+    -task_file ./prompts/research.txt \
+    -results_root /local/pipeline
+```
+
 ## 多步骤Agent任务
 
 `examples/agent_task_loop.tcl` 会监听 QueueFS，并将每个任务写回 `/local/.../agent-name/task-id.json`。任务负载支持以下字段：
@@ -314,6 +325,71 @@ tclsh examples/agent_task_loop.tcl \
 - 如果 `steps` 为空，则把 `prompt`（或 `text`）直接发送给本地 Ollama 模型（默认 `qwen3:4b`）。
 - 如果包含多步骤，Agent 会按顺序把 `steps` 中的 `prompt` 发送给 Ollama，并把每一步的输出记录在结果 JSON 的 `steps` 数组里。
 - 所有 Ollama 请求默认 120 秒超时，可通过 `-ollama_timeout` 修改。
+
+## 广播任务给多个 Agent
+
+`examples/broadcast_tasks.tcl` 可将同一个任务描述一次性投递到多个 QueueFS 队列：
+
+```bash
+tclsh examples/broadcast_tasks.tcl \
+    -agents agent1,agent2,agent3 \
+    -queue_prefix /queuefs/agent \
+    -task "Research recent progress on Tcl agents" \
+    -results_root /local/pipeline
+```
+
+脚本会：
+1. 为每个 Agent 创建（若不存在）对应的 `/queuefs/<agent>` 目录；
+2. 生成统一的父任务 ID (`task-...`) 以及每个 Agent 的结果目录（例如 `/local/pipeline/<root_task>/<agent>`）；
+3. 写入 JSON payload 到各自的 `enqueue`，payload 包含 `task_id`、`parent_task`、`description`、`result_dir` 等信息。
+
+下游 Agent 只需继续轮询自己的 QueueFS 队列，就能接力处理这些任务。
+
+### 多Agent流水线示例
+
+1. **广播任务**
+   ```bash
+   cd agfs-sdk/tcl
+   tclsh examples/broadcast_tasks.tcl \
+       -agents agent1,agent2 \
+       -queue_prefix /queuefs/agent \
+       -task "Research recent progress on Tcl agents" \
+       -results_root /local/pipeline
+   ```
+
+2. **启动Agent循环**（分别监听 `/queuefs/agent1`、`/queuefs/agent2`）
+   ```bash
+   tclsh examples/agent_task_loop.tcl \
+       -name agent1 \
+       -queue /queuefs/agent1 \
+       -results /local/pipeline \
+       -model qwen3:4b
+
+   tclsh examples/agent_task_loop.tcl \
+       -name agent2 \
+       -queue /queuefs/agent2 \
+       -results /local/pipeline \
+       -model qwen3:4b
+   ```
+   两个 Agent 会分别把结果写到 `/local/pipeline/<root_task>/agent1`、`agent2`。
+
+3. **（可选）汇总下一阶段**  
+   当你需要再交给汇总 Agent（例如 `/queuefs/agent3`）处理时，可以手动 enqueue：
+   ```bash
+   cat <<'EOF' > /queuefs/agent3/enqueue
+   {
+     "task_id": "task-xxxx-summary",
+     "parent_task": "task-xxxx",
+     "description": "Combine agent1 + agent2 results into a final report.",
+     "input_files": [
+       "/local/pipeline/task-xxxx/agent1/web.txt",
+       "/local/pipeline/task-xxxx/agent2/web.txt"
+     ],
+     "result_dir": "/local/pipeline/task-xxxx/final"
+   }
+   EOF
+   ```
+   然后启动第三个 `agent_task_loop.tcl` 监听 `/queuefs/agent3`，就能继续接力。
 
 # 运行测试
 tclsh test_basic.tcl

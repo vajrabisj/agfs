@@ -62,6 +62,11 @@ Experimental agfs shell implementation with Unix-style pipeline support and **AG
 
 agfs-shell is a simple shell that demonstrates Unix pipeline concepts while integrating with the AGFS (Aggregated File System) server. All file operations go through AGFS, allowing you to work with multiple backend filesystems (local, S3, SQL, etc.) through a unified interface.
 
+### Demo Workflows
+
+- [`docs/simpcurl_summary_pipeline.md`](docs/simpcurl_summary_pipeline.md) — 完整记录 SimpcurlFS → SummaryFS 的 Docker 启动、脚本化流水线。
+- [`docs/htmx_dashboard.md`](docs/htmx_dashboard.md) — HTMX 单页应用示例，展示“同一输入 + 多按钮”如何驱动搜索/摘要/趋势 agent。
+
 ## Features
 
 - **Unix-style pipelines**: Chain commands with `|` operator
