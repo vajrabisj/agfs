@@ -66,6 +66,7 @@ agfs-shell is a simple shell that demonstrates Unix pipeline concepts while inte
 
 - [`docs/simpcurl_summary_pipeline.md`](docs/simpcurl_summary_pipeline.md) — 完整记录 SimpcurlFS → SummaryFS 的 Docker 启动、脚本化流水线。
 - [`docs/htmx_dashboard.md`](docs/htmx_dashboard.md) — HTMX 单页应用示例，展示“同一输入 + 多按钮”如何驱动搜索/摘要/趋势 agent。
+- [`docs/skillsfs_mvp.md`](docs/skillsfs_mvp.md) — SkillsFS MVP：`/execute → /result` 惰性执行、缓存与日志。
 
 ## Features
 
